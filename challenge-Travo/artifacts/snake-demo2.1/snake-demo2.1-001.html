@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>snake-demo2.1-001</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: rgba(255, 255, 255, 0.08);
+      --panel-border: rgba(255, 255, 255, 0.14);
+      --text: #e9eefc;
+      --muted: rgba(233, 238, 252, 0.75);
+      --btn: rgba(255, 255, 255, 0.10);
+      --btn-hover: rgba(255, 255, 255, 0.16);
+      --btn-active: rgba(255, 255, 255, 0.20);
+      --focus: rgba(120, 160, 255, 0.55);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 700px at 50% 20%, #121b3a 0%, var(--bg) 55%, #070a14 100%);
+      color: var(--text);
+      font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Noto Sans", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+
+    .wrap {
+      width: min(560px, 100%);
+      display: grid;
+      gap: 12px;
+    }
+
+    #hud {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      border-radius: 12px;
+      backdrop-filter: blur(6px);
+    }
+
+    #score {
+      font-weight: 650;
+      letter-spacing: 0.2px;
+    }
+
+    #hint {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #restart {
+      appearance: none;
+      border: 1px solid var(--panel-border);
+      background: var(--btn);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      transition: background 120ms ease, transform 80ms ease, border-color 120ms ease;
+      flex: 0 0 auto;
+    }
+
+    #restart:hover { background: var(--btn-hover); }
+    #restart:active { background: var(--btn-active); transform: translateY(1px); }
+    #restart:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px var(--focus);
+    }
+
+    #game {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1 / 1;
+      border-radius: 14px;
+      border: 1px solid var(--panel-border);
+      background: rgba(0, 0, 0, 0.18);
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="hud" aria-label="HUD">
+      <div>
+        <div id="score" aria-live="polite">Puntaje: 0</div>
+        <div id="hint">Flechas / WASD para moverte. Espacio para reiniciar.</div>
+      </div>
+      <button id="restart" type="button">Reiniciar</button>
+    </div>
+
+    <canvas id="game" width="520" height="520" aria-label="Juego Snake"></canvas>
+
+    <div class="footer">snake-demo2.1-001</div>
+  </div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const CELL_SIZE = 20;
+      const GRID_SIZE = 26; // 26 * 20 = 520
+      const CANVAS_SIZE = GRID_SIZE * CELL_SIZE;
+      const TICK_MS = 110;
+
+      const COLOR_BG = '#0b1020';
+      const COLOR_GRID = 'rgba(255,255,255,0.06)';
+      const COLOR_SNAKE_HEAD = '#c6f6d5';
+      const COLOR_SNAKE_BODY = '#35c48b';
+      const COLOR_SNAKE_OUTLINE = 'rgba(0,0,0,0.25)';
+      const COLOR_FOOD = '#ff5c7a';
+      const COLOR_FOOD_GLOW = 'rgba(255, 92, 122, 0.25)';
+      const COLOR_TEXT = 'rgba(233, 238, 252, 0.95)';
+      const COLOR_TEXT_MUTED = 'rgba(233, 238, 252, 0.78)';
+      const COLOR_OVERLAY = 'rgba(0,0,0,0.45)';
+
+      const DIR = Object.freeze({
+        UP: { x: 0, y: -1, name: 'UP' },
+        DOWN: { x: 0, y: 1, name: 'DOWN' },
+        LEFT: { x: -1, y: 0, name: 'LEFT' },
+        RIGHT: { x: 1, y: 0, name: 'RIGHT' }
+      });
+
+      const OPPOSITE_DIR = Object.freeze({
+        UP: 'DOWN',
+        DOWN: 'UP',
+        LEFT: 'RIGHT',
+        RIGHT: 'LEFT'
+      });
+
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const scoreEl = document.getElementById('score');
+      const restartBtn = document.getElementById('restart');
+
+      canvas.width = CANVAS_SIZE;
+      canvas.height = CANVAS_SIZE;
+
+      const state = {
+        snake: [],
+        dir: DIR.RIGHT,
+        nextDir: DIR.RIGHT,
+        food: { x: 0, y: 0 },
+        score: 0,
+        isGameOver: false,
+        lastStepAt: 0
+      };
+
+      const clampInt = (n, min, max) => Math.max(min, Math.min(max, n | 0));
+
+      const pointKey = (p) => `${p.x},${p.y}`;
+
+      const setScore = (score) => {
+        scoreEl.textContent = `Puntaje: ${score}`;
+      };
+
+      const randomInt = (maxExclusive) => Math.floor(Math.random() * maxExclusive);
+
+      const isInsideGrid = (p) =>
+        p.x >= 0 && p.x < GRID_SIZE && p.y >= 0 && p.y < GRID_SIZE;
+
+      const isSelfCollision = (head, snake) => {
+        for (let i = 1; i < snake.length; i++) {
+          const s = snake[i];
+          if (s.x === head.x && s.y === head.y) return true;
+        }
+        return false;
+      };
+
+      const spawnFood = () => {
+        const occupied = new Set(state.snake.map(pointKey));
+        const freeCount = GRID_SIZE * GRID_SIZE - occupied.size;
+        if (freeCount <= 0) {
+          state.food = { x: -1, y: -1 };
+          return;
+        }
+
+        // Rejection sampling; fast enough for this grid size.
+        let x = 0;
+        let y = 0;
+        let tries = 0;
+        const MAX_TRIES = 5000;
+
+        do {
+          x = randomInt(GRID_SIZE);
+          y = randomInt(GRID_SIZE);
+          tries++;
+        } while (occupied.has(`${x},${y}`) && tries < MAX_TRIES);
+
+        if (tries >= MAX_TRIES) {
+          // Fallback: deterministic scan for a free cell
+          outer: for (let yy = 0; yy < GRID_SIZE; yy++) {
+            for (let xx = 0; xx < GRID_SIZE; xx++) {
+              if (!occupied.has(`${xx},${yy}`)) {
+                x = xx; y = yy;
+                break outer;
+              }
+            }
+          }
+        }
+
+        state.food = { x, y };
+      };
+
+      const resetGame = () => {
+        state.score = 0;
+        state.isGameOver = false;
+
+        const startX = clampInt(GRID_SIZE / 2, 0, GRID_SIZE - 1);
+        const startY = clampInt(GRID_SIZE / 2, 0, GRID_SIZE - 1);
+
+        state.snake = [
+          { x: startX, y: startY },
+          { x: startX - 1, y: startY },
+          { x: startX - 2, y: startY }
+        ].filter(isInsideGrid);
+
+        state.dir = DIR.RIGHT;
+        state.nextDir = DIR.RIGHT;
+        spawnFood();
+        setScore(state.score);
+
+        state.lastStepAt = performance.now();
+        render();
+      };
+
+      const setDirection = (dir) => {
+        if (state.isGameOver) return;
+
+        const currentName = state.dir.name;
+        if (OPPOSITE_DIR[currentName] === dir.name) return; // no immediate reverse
+        state.nextDir = dir;
+      };
+
+      const handleKeydown = (e) => {
+        const key = e.key;
+
+        if (key === 'ArrowUp' || key === 'w' || key === 'W') { e.preventDefault(); setDirection(DIR.UP); return; }
+        if (key === 'ArrowDown' || key === 's' || key === 'S') { e.preventDefault(); setDirection(DIR.DOWN); return; }
+        if (key === 'ArrowLeft' || key === 'a' || key === 'A') { e.preventDefault(); setDirection(DIR.LEFT); return; }
+        if (key === 'ArrowRight' || key === 'd' || key === 'D') { e.preventDefault(); setDirection(DIR.RIGHT); return; }
+
+        if (key === ' ' || key === 'Enter') {
+          e.preventDefault();
+          resetGame();
+        }
+      };
+
+      const step = () => {
+        if (state.isGameOver) return;
+
+        state.dir = state.nextDir;
+
+        const head = state.snake[0];
+        const newHead = { x: head.x + state.dir.x, y: head.y + state.dir.y };
+
+        if (!isInsideGrid(newHead)) {
+          state.isGameOver = true;
+          return;
+        }
+
+        // Move: add head first
+        state.snake.unshift(newHead);
+
+        const ateFood = newHead.x === state.food.x && newHead.y === state.food.y;
+        if (ateFood) {
+          state.score += 1;
+          setScore(state.score);
+          spawnFood();
+        } else {
+          // Remove tail to keep length
+          state.snake.pop();
+        }
+
+        if (isSelfCollision(newHead, state.snake)) {
+          state.isGameOver = true;
+          return;
+        }
+      };
+
+      const drawGrid = () => {
+        ctx.strokeStyle = COLOR_GRID;
+        ctx.lineWidth = 1;
+
+        // Crisp lines on integer coordinates
+        for (let i = 1; i < GRID_SIZE; i++) {
+          const p = i * CELL_SIZE + 0.5;
+          ctx.beginPath();
+          ctx.moveTo(p, 0);
+          ctx.lineTo(p, CANVAS_SIZE);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(0, p);
+          ctx.lineTo(CANVAS_SIZE, p);
+          ctx.stroke();
+        }
+      };
+
+      const drawCell = (x, y, fill, outline) => {
+        const px = x * CELL_SIZE;
+        const py = y * CELL_SIZE;
+        const pad = 2;
+        const w = CELL_SIZE - pad * 2;
+        const h = CELL_SIZE - pad * 2;
+
+        if (outline) {
+          ctx.fillStyle = outline;
+          ctx.fillRect(px + 1, py + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+        }
+
+        ctx.fillStyle = fill;
+        ctx.fillRect(px + pad, py + pad, w, h);
+      };
+
+      const render = () => {
+        ctx.fillStyle = COLOR_BG;
+        ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+        drawGrid();
+
+        // Food
+        if (state.food.x >= 0 && state.food.y >= 0) {
+          const fx = state.food.x * CELL_SIZE + CELL_SIZE / 2;
+          const fy = state.food.y * CELL_SIZE + CELL_SIZE / 2;
+
+          ctx.fillStyle = COLOR_FOOD_GLOW;
+          ctx.beginPath();
+          ctx.arc(fx, fy, CELL_SIZE * 0.42, 0, Math.PI * 2);
+          ctx.fill();
+
+          drawCell(state.food.x, state.food.y, COLOR_FOOD, 'rgba(0,0,0,0.20)');
+        }
+
+        // Snake
+        for (let i = state.snake.length - 1; i >= 0; i--) {
+          const seg = state.snake[i];
+          const isHead = i === 0;
+          drawCell(seg.x, seg.y, isHead ? COLOR_SNAKE_HEAD : COLOR_SNAKE_BODY, COLOR_SNAKE_OUTLINE);
+        }
+
+        if (state.isGameOver) {
+          ctx.fillStyle = COLOR_OVERLAY;
+          ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+          ctx.fillStyle = COLOR_TEXT;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = '700 34px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+          ctx.fillText('Game Over', CANVAS_SIZE / 2, CANVAS_SIZE / 2 - 18);
+
+          ctx.fillStyle = COLOR_TEXT_MUTED;
+          ctx.font = '500 14px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+          ctx.fillText('Presiona Reiniciar o Espacio', CANVAS_SIZE / 2, CANVAS_SIZE / 2 + 18);
+        }
+      };
+
+      const loop = (now) => {
+        const elapsed = now - state.lastStepAt;
+        if (elapsed >= TICK_MS) {
+          // Keep cadence stable even with frame drops
+          state.lastStepAt = now - (elapsed % TICK_MS);
+          step();
+        }
+        render();
+        requestAnimationFrame(loop);
+      };
+
+      const init = () => {
+        document.addEventListener('keydown', handleKeydown, { passive: false });
+        restartBtn.addEventListener('click', resetGame);
+
+        // Ensure canvas can be focused for accessibility shortcuts if desired.
+        canvas.tabIndex = 0;
+
+        resetGame();
+        requestAnimationFrame((now) => {
+          state.lastStepAt = now;
+          requestAnimationFrame(loop);
+        });
+      };
+
+      init();
+    })();
+  </script>
+</body>
+</html>
